@@ -1,0 +1,1431 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' blob:; connect-src 'none'; worker-src blob:;">
+<title>lens · code · ameba</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0a0612; --bg2:#10081d; --panel:#150a1e;
+  --rose:#d4a8d8; --rose2:#a778bd; --gold:#daa520;
+  --text:#e8dceb; --dim:#7a6a82; --line:#1f1428;
+  --slot:#3a2849; --slot-hover:#5a3868;
+  --err:#d87878; --ok:#a8d8a8;
+}
+html,body{height:100%;overflow:hidden}
+body{
+  background:radial-gradient(ellipse at top,#1a0a26 0%,#0a0612 60%);
+  color:var(--text);
+  font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","Helvetica Neue",sans-serif;
+  display:flex;flex-direction:column;
+}
+.shape{font-family:"Apple Color Emoji","Segoe UI Symbol","Noto Sans Symbols",monospace;letter-spacing:.05em}
+button{font:inherit;color:inherit;background:transparent;border:1px solid var(--line);cursor:pointer;border-radius:4px;padding:6px 10px;transition:all .15s}
+button:hover:not(:disabled){border-color:var(--rose);color:var(--rose)}
+button:disabled{opacity:.22;cursor:not-allowed}
+
+/* layout */
+nav{padding:10px 18px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line);flex:0 0 auto}
+nav a{color:var(--dim);text-decoration:none;font-size:10px;letter-spacing:3px;font-family:"SF Mono",Menlo,monospace}
+nav a:hover{color:var(--rose)}
+nav .crest{color:var(--rose);font-weight:700}
+
+#ribbon{padding:14px 22px;border-bottom:1px solid var(--line);min-height:54px;flex:0 0 auto;font-size:14px;color:#cdb6d2;font-style:italic;line-height:1.5}
+#ribbon .label{font-size:9px;letter-spacing:3px;color:var(--gold);font-style:normal;display:block;margin-bottom:4px;font-family:"SF Mono",Menlo,monospace}
+
+#main{flex:1 1 auto;display:grid;grid-template-columns:200px 1fr 220px;min-height:0}
+aside,section{padding:14px;overflow-y:auto;border-right:1px solid var(--line)}
+aside:last-child{border-right:none}
+
+#palette h3,#vocab h3{font-size:9px;letter-spacing:3px;color:var(--gold);font-family:"SF Mono",Menlo,monospace;margin:8px 0 8px;font-weight:600}
+#palette h3:first-child,#vocab h3:first-child{margin-top:0}
+
+.pal-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:14px}
+.pal-btn{padding:10px 4px;text-align:center;border:1px solid var(--line);border-radius:4px;cursor:pointer;background:var(--panel);transition:all .15s;font-size:11px;line-height:1.3}
+.pal-btn:hover:not(.disabled){border-color:var(--rose);background:#1d1230;color:var(--rose)}
+.pal-btn.disabled{opacity:.18;cursor:not-allowed}
+.pal-btn .glyph{font-size:22px;display:block;margin-bottom:3px}
+.pal-btn.vocab-btn .glyph{color:var(--gold)}
+
+#compose{background:#0d0718;display:flex;flex-direction:column}
+#compose-inner{flex:1 1 auto;padding:6px;overflow-y:auto}
+.help{font-size:11px;color:var(--dim);text-align:center;padding:10px;font-style:italic}
+
+/* nodes */
+.node{display:inline-block;border:1px solid var(--line);border-radius:6px;padding:4px 8px;margin:3px;background:#160b22;vertical-align:top;position:relative}
+.node.t-Value{border-color:#5a4868}
+.node.t-Number{border-color:#6a5478}
+.node.t-Bool{border-color:#7a4858}
+.node.t-Stmt{border-color:#487868}
+.node.t-Block{border-color:#384858;background:#0f0a18}
+.node.t-Program{border:2px solid var(--rose);background:#150a22;padding:8px;display:block;margin:0}
+.node.t-Terminator{border-color:var(--rose);background:#220a22}
+.node .verb{font-size:18px;margin-right:4px;vertical-align:middle}
+.node .name{font-size:10px;letter-spacing:1px;color:var(--dim);font-family:"SF Mono",Menlo,monospace}
+.node .lit{color:var(--gold);font-family:"SF Mono",Menlo,monospace;padding:1px 4px;background:#221a08;border-radius:3px}
+.node .slot-row{display:inline-block;margin-left:4px}
+.node .slot-row .slot-label{font-size:9px;color:var(--dim);text-transform:uppercase;letter-spacing:1px;margin-right:2px;font-family:"SF Mono",Menlo,monospace}
+.node .delete-btn{position:absolute;top:-7px;right:-7px;width:16px;height:16px;border-radius:50%;background:#220a22;border:1px solid var(--err);color:var(--err);font-size:10px;line-height:14px;text-align:center;cursor:pointer;opacity:0;transition:opacity .15s;padding:0}
+.node:hover > .delete-btn{opacity:1}
+
+.slot{display:inline-block;border:1px dashed var(--slot);border-radius:6px;padding:4px 10px;margin:2px;color:var(--dim);font-size:10px;letter-spacing:1px;cursor:pointer;text-transform:lowercase;font-family:"SF Mono",Menlo,monospace;transition:all .15s;min-width:50px;text-align:center}
+.slot:hover{border-color:var(--slot-hover);color:var(--rose)}
+.slot.selected{border-color:var(--rose);color:var(--rose);background:#1d1230;border-style:solid;animation:pulse 1.4s ease-in-out infinite}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(212,168,216,.4)}50%{box-shadow:0 0 0 4px rgba(212,168,216,0)}}
+
+.block-slot{border:1px dashed #2a1f3a;padding:6px;border-radius:6px;margin:4px 0;min-height:38px;display:block;background:#0a0614}
+.block-slot.selected{border-color:var(--rose);border-style:solid}
+.add-stmt{display:inline-block;padding:3px 10px;margin:2px;border:1px dashed #2a1f3a;border-radius:6px;color:var(--dim);font-size:11px;cursor:pointer;font-family:"SF Mono",Menlo,monospace}
+.add-stmt:hover{border-color:var(--rose);color:var(--rose)}
+
+/* numpad */
+#numpad{position:fixed;bottom:120px;left:50%;transform:translateX(-50%);background:var(--panel);border:1px solid var(--rose);border-radius:6px;padding:10px;z-index:200;display:none}
+#numpad.show{display:block}
+#numpad .npad-row{display:flex;gap:4px;margin-bottom:4px}
+#numpad button{min-width:36px;padding:8px}
+#numpad .npad-display{font-family:"SF Mono",Menlo,monospace;color:var(--gold);font-size:18px;text-align:center;padding:6px;background:#0d0718;border-radius:4px;margin-bottom:6px;min-width:200px}
+
+/* string builder */
+#stringpad{position:fixed;bottom:120px;left:50%;transform:translateX(-50%);background:var(--panel);border:1px solid var(--rose);border-radius:6px;padding:10px;z-index:200;display:none;max-width:500px}
+#stringpad.show{display:block}
+#stringpad .spad-display{font-family:"SF Mono",Menlo,monospace;color:var(--gold);font-size:14px;text-align:center;padding:6px;background:#0d0718;border-radius:4px;margin-bottom:6px;min-height:30px}
+#stringpad .spad-grid{display:grid;grid-template-columns:repeat(8,1fr);gap:3px}
+#stringpad .spad-grid button{padding:6px;font-size:14px}
+#stringpad .spad-actions{margin-top:8px;display:flex;gap:6px;justify-content:flex-end}
+
+/* cmp picker */
+#cmppad{position:fixed;bottom:120px;left:50%;transform:translateX(-50%);background:var(--panel);border:1px solid var(--rose);border-radius:6px;padding:10px;z-index:200;display:none}
+#cmppad.show{display:block}
+#cmppad button{margin:2px;padding:8px 14px;font-size:16px}
+
+/* output */
+#output{flex:0 0 auto;height:140px;border-top:1px solid var(--line);padding:10px 18px;overflow-y:auto;background:#08040f;font-family:"SF Mono",Menlo,monospace;font-size:12px;line-height:1.6}
+#output .out-line{color:#cdb6d2}
+#output .out-err{color:var(--err)}
+#output .out-ok{color:var(--ok)}
+#output .out-meta{color:var(--dim);font-size:10px;letter-spacing:1px}
+
+/* controls */
+#controls{flex:0 0 auto;padding:10px 18px;border-top:1px solid var(--line);display:flex;gap:10px;justify-content:flex-end;align-items:center;background:var(--bg2)}
+#controls .status{flex:1;font-size:11px;color:var(--dim);font-family:"SF Mono",Menlo,monospace;letter-spacing:1px}
+#controls #run{border-color:var(--rose);color:var(--rose);padding:8px 18px;font-weight:600}
+#controls #run:hover:not(:disabled){background:var(--rose);color:#0a0612}
+#controls #save:not(:disabled){border-color:var(--gold);color:var(--gold)}
+#controls #save:hover:not(:disabled){background:var(--gold);color:#0a0612}
+
+/* vocab list */
+.vocab-card{padding:6px;margin-bottom:6px;background:var(--panel);border:1px solid var(--line);border-radius:4px;cursor:pointer;transition:all .15s}
+.vocab-card:hover{border-color:var(--gold)}
+.vocab-card .vc-glyph{font-size:18px;color:var(--gold)}
+.vocab-card .vc-name{font-size:11px;color:var(--text);font-family:"SF Mono",Menlo,monospace;margin-left:6px}
+.vocab-card .vc-narr{font-size:10px;color:var(--dim);font-style:italic;margin-top:3px;line-height:1.4}
+.vocab-card .vc-del{float:right;color:var(--dim);font-size:11px;cursor:pointer;padding:0 4px}
+.vocab-card .vc-del:hover{color:var(--err)}
+
+/* save dialog */
+#savedlg{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--panel);border:1px solid var(--rose);border-radius:6px;padding:18px;z-index:300;display:none;min-width:340px}
+#savedlg.show{display:block}
+#savedlg h4{font-size:11px;letter-spacing:3px;color:var(--gold);font-family:"SF Mono",Menlo,monospace;margin-bottom:10px}
+#savedlg .glyph-pick{display:grid;grid-template-columns:repeat(8,1fr);gap:4px;margin-bottom:10px}
+#savedlg .glyph-pick button{padding:8px;font-size:18px}
+#savedlg .glyph-pick button.sel{border-color:var(--gold);background:#221a08;color:var(--gold)}
+#savedlg .name-show{font-family:"SF Mono",Menlo,monospace;color:var(--gold);background:#0d0718;padding:6px;border-radius:4px;text-align:center;margin-bottom:10px;min-height:30px}
+#savedlg .name-pad{display:grid;grid-template-columns:repeat(13,1fr);gap:3px;margin-bottom:10px}
+#savedlg .name-pad button{padding:5px 0;font-size:11px}
+#savedlg .save-actions{display:flex;gap:8px;justify-content:flex-end}
+
+@media (max-width:900px){
+  #main{grid-template-columns:140px 1fr 160px}
+}
+</style>
+</head>
+<body>
+
+<nav>
+  <a class="crest" href="/">⊙ LENS · CODE</a>
+  <span style="display:flex;gap:18px">
+    <a href="/">/ home</a>
+    <a href="/news.html">/ news</a>
+    <span style="color:var(--gold);font-size:10px;letter-spacing:3px;font-family:'SF Mono',Menlo,monospace">AMEBA · v0</span>
+  </span>
+</nav>
+
+<div id="ribbon">
+  <span class="label">◐ LENS SAYS</span>
+  <span id="ribbon-text">i'm an ameba. give me shapes. i'll make a △, then i'll ✕.</span>
+</div>
+
+<div id="main">
+  <aside id="palette"></aside>
+  <section id="compose"><div id="compose-inner"></div></section>
+  <aside id="vocab"></aside>
+</div>
+
+<div id="output">
+  <div class="out-meta">◯ OUTPUT — empty. press run.</div>
+</div>
+
+<div id="controls">
+  <span class="status" id="status">slot waiting · ✕ required to run</span>
+  <button id="clear">clear</button>
+  <button id="run" disabled>▶ run</button>
+  <button id="save" disabled>↓ name &amp; save</button>
+</div>
+
+<!-- numpad for Number literals -->
+<div id="numpad">
+  <div class="npad-display" id="npad-display">0</div>
+  <div class="npad-row">
+    <button data-n="7">7</button><button data-n="8">8</button><button data-n="9">9</button>
+  </div>
+  <div class="npad-row">
+    <button data-n="4">4</button><button data-n="5">5</button><button data-n="6">6</button>
+  </div>
+  <div class="npad-row">
+    <button data-n="1">1</button><button data-n="2">2</button><button data-n="3">3</button>
+  </div>
+  <div class="npad-row">
+    <button data-n="0">0</button><button data-n="back">⌫</button><button data-n="cancel">✕</button>
+  </div>
+  <div class="npad-row" style="margin-top:6px">
+    <button data-n="ok" style="flex:1;border-color:var(--rose);color:var(--rose)">ok</button>
+  </div>
+</div>
+
+<!-- string builder for string literals -->
+<div id="stringpad">
+  <div class="spad-display" id="spad-display"></div>
+  <div class="spad-grid" id="spad-grid"></div>
+  <div class="spad-actions">
+    <button id="spad-back">⌫</button>
+    <button id="spad-cancel">✕</button>
+    <button id="spad-ok" style="border-color:var(--rose);color:var(--rose)">ok</button>
+  </div>
+</div>
+
+<!-- cmp operator picker -->
+<div id="cmppad">
+  <button data-op="<">a &lt; b</button>
+  <button data-op="==">a == b</button>
+  <button data-op=">">a &gt; b</button>
+  <button data-op="!=">a != b</button>
+  <button data-op="cancel">✕</button>
+</div>
+
+<!-- save dialog -->
+<div id="savedlg">
+  <h4>NAME &amp; SAVE — what shall i call this?</h4>
+  <div style="font-size:11px;color:var(--dim);margin-bottom:6px">pick a glyph hint</div>
+  <div class="glyph-pick" id="save-glyphs"></div>
+  <div style="font-size:11px;color:var(--dim);margin-bottom:6px">build a name (no keyboard, just shapes &amp; letters)</div>
+  <div class="name-show" id="save-name-show"></div>
+  <div class="name-pad" id="save-name-pad"></div>
+  <div class="save-actions">
+    <button id="save-cancel">cancel</button>
+    <button id="save-ok" style="border-color:var(--gold);color:var(--gold)">save</button>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+/* ============================================================
+   GRAMMAR — the typed alphabet
+   ============================================================ */
+
+// types: Value, Number, Bool, Stmt, Block, Program, Terminator
+// subtype rule: a slot of type Value accepts Value | Number | Bool
+
+const VERBS = {
+  spawn:    { glyph:'△', english:'spawn',    type:'Value',  slots:[ {name:'value', accepts:'Literal'} ] },
+  count:    { glyph:'◯', english:'count',    type:'Number', slots:[ {name:'n', accepts:'NumLit'} ] },
+  loop:     { glyph:'↻', english:'loop',     type:'Stmt',   slots:[ {name:'times', accepts:'Number'}, {name:'body', accepts:'Block'} ] },
+  branch:   { glyph:'◇', english:'branch',   type:'Stmt',   slots:[ {name:'cond', accepts:'Bool'}, {name:'then', accepts:'Block'}, {name:'else', accepts:'Block'} ] },
+  render:   { glyph:'□', english:'render',   type:'Stmt',   slots:[ {name:'what', accepts:'Value'} ] },
+  save:     { glyph:'↓', english:'save',     type:'Stmt',   slots:[ {name:'key', accepts:'Value'}, {name:'val', accepts:'Value'} ] },
+  load:     { glyph:'↑', english:'load',     type:'Value',  slots:[ {name:'key', accepts:'Value'} ] },
+  fetch:    { glyph:'→', english:'fetch',    type:'Value',  slots:[ {name:'url', accepts:'Value'} ], hidden:true },
+  talk:     { glyph:'◐', english:'talk',     type:'Stmt',   slots:[ {name:'words', accepts:'Value'} ] },
+  dissolve: { glyph:'✕', english:'dissolve', type:'Terminator', slots:[] },
+  cmp:      { glyph:'⚖', english:'compare',  type:'Bool',   slots:[ {name:'a', accepts:'Value'}, {name:'b', accepts:'Value'} ], extra:'op' },
+};
+
+// Literal types are special — created via numpad/stringpad, not from VERBS
+// They show up as { kind:'lit', litType:'Number'|'String'|'Array', value:..., type:'Number'|'Value' }
+
+function accepts(slotAccepts, candidateType, candidateLitType) {
+  // candidate may be a verb (use type) or a literal (use litType)
+  if (slotAccepts === 'Literal') {
+    // △ spawn slot accepts any literal (Number, String, or Array)
+    return candidateLitType !== undefined;
+  }
+  if (slotAccepts === 'NumLit') {
+    return candidateLitType === 'Number';
+  }
+  if (slotAccepts === 'Block') {
+    return candidateType === 'Block';
+  }
+  if (slotAccepts === 'Value') {
+    return ['Value','Number','Bool'].includes(candidateType);
+  }
+  if (slotAccepts === 'Number') {
+    return candidateType === 'Number';
+  }
+  if (slotAccepts === 'Bool') {
+    return candidateType === 'Bool';
+  }
+  if (slotAccepts === 'Terminator') {
+    return candidateType === 'Terminator';
+  }
+  return slotAccepts === candidateType;
+}
+
+/* ============================================================
+   AST — the program tree
+   ============================================================ */
+
+let nextId = 1;
+const nid = () => 'n' + (nextId++);
+
+function makeNode(verb, slotsOverride) {
+  if (verb === 'lit') throw new Error('use makeLit');
+  const v = VERBS[verb];
+  if (!v) throw new Error('unknown verb '+verb);
+  const node = { id: nid(), kind:'verb', verb, type: v.type, slots: {} };
+  for (const s of v.slots) {
+    if (s.accepts === 'Block') node.slots[s.name] = { id:nid(), kind:'block', type:'Block', children:[] };
+    else node.slots[s.name] = null;
+  }
+  if (v.extra === 'op') node.op = '<';
+  if (slotsOverride) for (const k in slotsOverride) node.slots[k] = slotsOverride[k];
+  return node;
+}
+
+function makeLit(litType, value) {
+  return { id: nid(), kind:'lit', litType, value, type: litType === 'Number' ? 'Number' : 'Value' };
+}
+
+function makeBlock() {
+  return { id: nid(), kind:'block', type:'Block', children:[] };
+}
+
+function makeProgram() {
+  return { id: nid(), kind:'program', type:'Program', body: makeBlock() };
+}
+
+// vocab ref node — calls a saved verb
+function makeRef(name, returnType) {
+  return { id: nid(), kind:'ref', name, type: returnType };
+}
+
+let AST = makeProgram();
+let SELECTED = null;  // { parent, key }  — points at current empty slot
+
+/* ============================================================
+   SLOT WALKING — find empty slots, navigate selection
+   ============================================================ */
+
+function* walkEmptySlots(node, parent, key) {
+  if (node === null && parent) {
+    yield { parent, key };
+    return;
+  }
+  if (!node) return;
+  if (node.kind === 'program') {
+    yield* walkEmptySlots(node.body, node, 'body');
+  } else if (node.kind === 'block') {
+    // block children: yield empty slots within each child, then a synthetic "append" slot
+    for (let i=0; i<node.children.length; i++) {
+      yield* walkEmptySlots(node.children[i], node.children, i);
+    }
+    // append slot is implicit (the [+] button)
+  } else if (node.kind === 'verb') {
+    for (const sname in node.slots) {
+      const s = node.slots[sname];
+      if (s === null) {
+        yield { parent: node.slots, key: sname, parentNode: node };
+      } else if (s.kind === 'block') {
+        // walk into block children
+        yield* walkEmptySlots(s, node.slots, sname);
+      } else {
+        yield* walkEmptySlots(s, node.slots, sname);
+      }
+    }
+  }
+  // lit and ref are leaves
+}
+
+function getSlotType(parent, key) {
+  // determine what type the slot at parent[key] expects
+  if (parent && parent.kind === 'program' && key === 'body') return { accepts:'Block' };
+  if (parent && parent.kind === 'block') {
+    // a position in block children — accepts Stmt or Terminator (only ✕ at end)
+    return { accepts:'Stmt-or-Terminator', parent };
+  }
+  if (Array.isArray(parent)) {
+    // block.children array
+    return { accepts:'Stmt-or-Terminator', isArray:true };
+  }
+  // parent is a node.slots object — find which verb owns it
+  // we need parentNode passed in or we look up
+  return null;
+}
+
+// safer: build a typed slot finder using parentNode
+function selectFirstEmptySlot() {
+  // walk and find first slot in DFS order
+  const slots = collectEmptySlots(AST);
+  SELECTED = slots[0] || null;
+}
+
+function collectEmptySlots(node, parent, key, parentNode, slotMeta) {
+  const out = [];
+  if (!node) {
+    if (parent !== undefined) out.push({ parent, key, parentNode, slotMeta });
+    return out;
+  }
+  if (node.kind === 'program') {
+    out.push(...collectEmptySlots(node.body, node, 'body', node, { accepts:'Block' }));
+  } else if (node.kind === 'block') {
+    for (let i=0; i<node.children.length; i++) {
+      const c = node.children[i];
+      if (c === null) {
+        out.push({ parent:node.children, key:i, parentNode:node, slotMeta:{ accepts:'Stmt-or-Terminator', blockNode:node, idx:i } });
+      } else {
+        out.push(...collectEmptySlots(c, node.children, i, node, { accepts:'Stmt-or-Terminator' }));
+      }
+    }
+  } else if (node.kind === 'verb') {
+    const v = VERBS[node.verb];
+    for (const sdef of v.slots) {
+      const sname = sdef.name;
+      const s = node.slots[sname];
+      if (s === null) {
+        out.push({ parent: node.slots, key: sname, parentNode: node, slotMeta: { accepts: sdef.accepts, slotName:sname } });
+      } else if (s && s.kind === 'block') {
+        out.push(...collectEmptySlots(s, node.slots, sname, node, { accepts:sdef.accepts }));
+      } else {
+        out.push(...collectEmptySlots(s, node.slots, sname, node, { accepts:sdef.accepts }));
+      }
+    }
+  }
+  return out;
+}
+
+function selectedSlotMeta() {
+  if (!SELECTED) return null;
+  return SELECTED.slotMeta;
+}
+
+/* ============================================================
+   PROGRAM VALIDATION — must end in ✕
+   ============================================================ */
+
+function programIsRunnable(prog) {
+  if (!prog || prog.kind !== 'program') return false;
+  const body = prog.body;
+  if (body.children.length === 0) return false;
+  // every child must be non-null
+  for (const c of body.children) if (c === null) return false;
+  // last child must be a dissolve
+  const last = body.children[body.children.length-1];
+  if (!last || last.kind !== 'verb' || last.verb !== 'dissolve') return false;
+  // every slot in every node must be filled (no nulls)
+  return allSlotsFilled(body);
+}
+
+function allSlotsFilled(node) {
+  if (!node) return false;
+  if (node.kind === 'lit') return node.value !== undefined && node.value !== null;
+  if (node.kind === 'ref') return true;
+  if (node.kind === 'block') {
+    for (const c of node.children) if (!allSlotsFilled(c)) return false;
+    return true;
+  }
+  if (node.kind === 'verb') {
+    for (const sname in node.slots) {
+      if (node.slots[sname] === null) return false;
+      if (!allSlotsFilled(node.slots[sname])) return false;
+    }
+    return true;
+  }
+  return false;
+}
+
+function programHasDissolve(prog) {
+  // for "can place ✕": there must NOT already be a dissolve, AND selected must be at trailing block position
+  const body = prog.body;
+  for (const c of body.children) if (c && c.kind === 'verb' && c.verb === 'dissolve') return true;
+  return false;
+}
+
+function programHasFetch(prog) {
+  return treeHas(prog, n => n && n.kind === 'verb' && n.verb === 'fetch');
+}
+
+function treeHas(node, pred) {
+  if (!node) return false;
+  if (pred(node)) return true;
+  if (node.kind === 'program') return treeHas(node.body, pred);
+  if (node.kind === 'block') return node.children.some(c => treeHas(c, pred));
+  if (node.kind === 'verb') {
+    for (const k in node.slots) if (treeHas(node.slots[k], pred)) return true;
+  }
+  return false;
+}
+
+/* ============================================================
+   PALETTE — buttons enabled based on selected slot type
+   ============================================================ */
+
+const PALETTE_ORDER = ['spawn','count','loop','branch','render','save','load','talk','dissolve','cmp'];
+
+function renderPalette() {
+  const el = document.getElementById('palette');
+  el.innerHTML = '';
+  const meta = selectedSlotMeta();
+
+  // CORE section
+  const h1 = document.createElement('h3');
+  h1.textContent = 'CORE · 10 SHAPES';
+  el.appendChild(h1);
+  const grid = document.createElement('div');
+  grid.className = 'pal-grid';
+
+  for (const verb of PALETTE_ORDER) {
+    const v = VERBS[verb];
+    if (v.hidden && !LENS_FLAGS.net) continue;
+    const btn = document.createElement('button');
+    btn.className = 'pal-btn';
+    btn.innerHTML = `<span class="glyph shape">${v.glyph}</span><span>${v.english}</span>`;
+
+    // determine if this verb can be placed at SELECTED
+    let canPlace = false;
+    if (meta) {
+      canPlace = canPlaceVerb(verb, meta);
+    }
+    if (!canPlace) btn.classList.add('disabled');
+    else btn.onclick = () => placeVerb(verb);
+
+    grid.appendChild(btn);
+  }
+
+  // Literal buttons (Number, String, Array)
+  const litRow = document.createElement('div');
+  litRow.className = 'pal-grid';
+  const numBtn = document.createElement('button');
+  numBtn.className = 'pal-btn';
+  numBtn.innerHTML = `<span class="glyph shape" style="color:var(--gold)">123</span><span>number</span>`;
+  if (!meta || !canPlaceLit('Number', meta)) numBtn.classList.add('disabled');
+  else numBtn.onclick = () => openNumpad();
+  litRow.appendChild(numBtn);
+
+  const strBtn = document.createElement('button');
+  strBtn.className = 'pal-btn';
+  strBtn.innerHTML = `<span class="glyph shape" style="color:var(--gold)">"…"</span><span>string</span>`;
+  if (!meta || !canPlaceLit('String', meta)) strBtn.classList.add('disabled');
+  else strBtn.onclick = () => openStringpad();
+  litRow.appendChild(strBtn);
+
+  el.appendChild(grid);
+  el.appendChild(litRow);
+
+  // VOCAB section
+  if (Object.keys(VOCAB).length > 0) {
+    const h2 = document.createElement('h3');
+    h2.textContent = 'HER VOCAB';
+    el.appendChild(h2);
+    const vgrid = document.createElement('div');
+    vgrid.className = 'pal-grid';
+    for (const name in VOCAB) {
+      const ve = VOCAB[name];
+      const btn = document.createElement('button');
+      btn.className = 'pal-btn vocab-btn';
+      btn.innerHTML = `<span class="glyph shape">${ve.glyphHint}</span><span>${name}</span>`;
+      let can = false;
+      if (meta) can = canPlaceRef(ve.returnType, meta);
+      if (!can) btn.classList.add('disabled');
+      else btn.onclick = () => placeRef(name, ve.returnType);
+      vgrid.appendChild(btn);
+    }
+    el.appendChild(vgrid);
+  }
+}
+
+function canPlaceVerb(verb, meta) {
+  const v = VERBS[verb];
+  if (!meta) return false;
+  if (verb === 'dissolve') {
+    // can only place ✕ at the trailing block position of the top-level program
+    if (meta.accepts !== 'Stmt-or-Terminator') return false;
+    if (programHasDissolve(AST)) return false;
+    // SELECTED must be the trailing append slot of program.body
+    if (meta.blockNode !== AST.body) return false;
+    // must be the last index
+    if (meta.idx !== AST.body.children.length - 1 && meta.idx !== AST.body.children.length) return false;
+    return true;
+  }
+  // Stmt-or-Terminator: accepts any Stmt verb (not Value/Number/Bool)
+  if (meta.accepts === 'Stmt-or-Terminator') {
+    return v.type === 'Stmt';
+  }
+  return accepts(meta.accepts, v.type);
+}
+
+function canPlaceLit(litType, meta) {
+  if (!meta) return false;
+  if (meta.accepts === 'Stmt-or-Terminator') return false;
+  if (meta.accepts === 'Block') return false;
+  if (meta.accepts === 'Literal') return true;
+  if (meta.accepts === 'NumLit') return litType === 'Number';
+  if (meta.accepts === 'Number') return litType === 'Number';
+  if (meta.accepts === 'Value') return true;  // any literal is a Value
+  return false;
+}
+
+function canPlaceRef(returnType, meta) {
+  if (!meta) return false;
+  if (meta.accepts === 'Stmt-or-Terminator') return returnType === 'Stmt';
+  return accepts(meta.accepts, returnType);
+}
+
+/* ============================================================
+   PLACEMENT — slot the chosen verb/lit into AST at SELECTED
+   ============================================================ */
+
+function placeVerb(verb) {
+  if (!SELECTED) return;
+  const node = makeNode(verb);
+  insertIntoSelected(node);
+  // if dissolve, don't auto-select anything (program complete)
+  if (verb !== 'dissolve') {
+    // also auto-append a new empty stmt slot in the same block (for next stmt) — no, we let user decide
+    autoSelectNextEmpty(node);
+  } else {
+    SELECTED = null;
+  }
+  refreshAll();
+}
+
+function placeLit(litType, value) {
+  if (!SELECTED) return;
+  const node = makeLit(litType, value);
+  insertIntoSelected(node);
+  autoSelectNextEmpty();
+  refreshAll();
+}
+
+function placeRef(name, returnType) {
+  if (!SELECTED) return;
+  const node = makeRef(name, returnType);
+  insertIntoSelected(node);
+  autoSelectNextEmpty();
+  refreshAll();
+}
+
+function insertIntoSelected(node) {
+  const { parent, key } = SELECTED;
+  if (Array.isArray(parent)) {
+    parent[key] = node;
+  } else {
+    parent[key] = node;
+  }
+}
+
+function autoSelectNextEmpty(justInserted) {
+  // prefer a fresh empty slot inside the just-inserted node
+  if (justInserted) {
+    const inner = collectEmptySlots(justInserted);
+    if (inner.length > 0) {
+      SELECTED = inner[0];
+      return;
+    }
+  }
+  // else pick the first empty slot in the program
+  const all = collectEmptySlots(AST);
+  SELECTED = all[0] || null;
+}
+
+function deleteNode(targetNode) {
+  // walk and replace targetNode with null in its parent
+  function recur(n, parent, key) {
+    if (n === targetNode) {
+      if (Array.isArray(parent)) parent[key] = null;
+      else parent[key] = null;
+      return true;
+    }
+    if (!n) return false;
+    if (n.kind === 'program') return recur(n.body, n, 'body');
+    if (n.kind === 'block') {
+      for (let i=0; i<n.children.length; i++) if (recur(n.children[i], n.children, i)) return true;
+      return false;
+    }
+    if (n.kind === 'verb') {
+      for (const k in n.slots) if (recur(n.slots[k], n.slots, k)) return true;
+      return false;
+    }
+    return false;
+  }
+  recur(AST, null, null);
+  // if we deleted from a block array slot, leave the null there (it stays as an empty slot)
+  // if it was the last item in a block and is null, remove it (clean up trailing empty)
+  cleanupBlocks(AST);
+  selectFirstEmptySlot();
+  refreshAll();
+}
+
+function cleanupBlocks(node) {
+  if (!node) return;
+  if (node.kind === 'program') cleanupBlocks(node.body);
+  else if (node.kind === 'block') {
+    // remove trailing nulls except keep one if block is empty
+    while (node.children.length > 1 && node.children[node.children.length-1] === null) {
+      node.children.pop();
+    }
+    for (const c of node.children) cleanupBlocks(c);
+  } else if (node.kind === 'verb') {
+    for (const k in node.slots) cleanupBlocks(node.slots[k]);
+  }
+}
+
+function appendStmtSlot(blockNode) {
+  blockNode.children.push(null);
+  // select the newly added slot
+  const all = collectEmptySlots(AST);
+  for (const s of all) {
+    if (s.parent === blockNode.children && s.key === blockNode.children.length-1) {
+      SELECTED = s;
+      break;
+    }
+  }
+  refreshAll();
+}
+
+/* ============================================================
+   COMPOSE RENDERING
+   ============================================================ */
+
+function renderCompose() {
+  const el = document.getElementById('compose-inner');
+  el.innerHTML = '';
+  el.appendChild(renderNode(AST));
+}
+
+function renderNode(node, ctx) {
+  if (!node) {
+    // empty slot — but caller should have used renderSlot; this is a fallback
+    return renderSlot('value', null, null);
+  }
+  if (node.kind === 'program') {
+    const wrap = document.createElement('div');
+    wrap.className = 'node t-Program';
+    const lab = document.createElement('div');
+    lab.style.fontSize = '10px';
+    lab.style.color = 'var(--rose)';
+    lab.style.letterSpacing = '3px';
+    lab.style.marginBottom = '6px';
+    lab.style.fontFamily = '"SF Mono",Menlo,monospace';
+    lab.textContent = '◉ PROGRAM';
+    wrap.appendChild(lab);
+    wrap.appendChild(renderBlock(node.body, true));
+    return wrap;
+  }
+  if (node.kind === 'block') {
+    return renderBlock(node, false);
+  }
+  if (node.kind === 'verb') {
+    return renderVerb(node);
+  }
+  if (node.kind === 'lit') {
+    const div = document.createElement('span');
+    div.className = 'node t-' + node.type;
+    div.innerHTML = `<span class="lit">${escapeHtml(litDisplay(node))}</span>`;
+    addDelete(div, node);
+    return div;
+  }
+  if (node.kind === 'ref') {
+    const div = document.createElement('span');
+    div.className = 'node t-' + node.type;
+    const ve = VOCAB[node.name];
+    const glyph = ve ? ve.glyphHint : '◈';
+    div.innerHTML = `<span class="verb shape">${glyph}</span><span class="name">${escapeHtml(node.name)}</span>`;
+    addDelete(div, node);
+    return div;
+  }
+}
+
+function renderVerb(node) {
+  const v = VERBS[node.verb];
+  const span = document.createElement('span');
+  span.className = 'node t-' + node.type;
+  span.innerHTML = `<span class="verb shape">${v.glyph}</span><span class="name">${v.english}</span>`;
+  if (node.verb === 'cmp') {
+    const opSpan = document.createElement('span');
+    opSpan.className = 'lit';
+    opSpan.style.cursor = 'pointer';
+    opSpan.style.marginLeft = '6px';
+    opSpan.textContent = node.op;
+    opSpan.onclick = (e) => { e.stopPropagation(); openCmpPad(node); };
+    span.appendChild(opSpan);
+  }
+  for (const sdef of v.slots) {
+    const sname = sdef.name;
+    const child = node.slots[sname];
+    const row = document.createElement('span');
+    row.className = 'slot-row';
+    const lab = document.createElement('span');
+    lab.className = 'slot-label';
+    lab.textContent = sname;
+    row.appendChild(lab);
+    if (child === null) {
+      row.appendChild(renderSlot(sdef.accepts, node.slots, sname));
+    } else if (child.kind === 'block') {
+      row.appendChild(renderBlock(child, false));
+    } else {
+      row.appendChild(renderNode(child));
+    }
+    span.appendChild(row);
+  }
+  addDelete(span, node);
+  return span;
+}
+
+function renderBlock(blockNode, isProgram) {
+  const wrap = document.createElement('div');
+  wrap.className = 'block-slot';
+  if (blockNode.children.length === 0) {
+    wrap.appendChild(renderSlot('Stmt-or-Terminator', blockNode.children, 0));
+    blockNode.children.push(null);  // ensure there's a slot to fill
+  } else {
+    for (let i=0; i<blockNode.children.length; i++) {
+      const c = blockNode.children[i];
+      if (c === null) {
+        wrap.appendChild(renderSlot('Stmt-or-Terminator', blockNode.children, i, blockNode));
+      } else {
+        wrap.appendChild(renderNode(c));
+        const br = document.createElement('br');
+        wrap.appendChild(br);
+      }
+    }
+  }
+  // [+] button — disabled if last child is a dissolve
+  const last = blockNode.children[blockNode.children.length-1];
+  const canAppend = !last || (last.kind === 'verb' && last.verb !== 'dissolve') || (last.kind !== 'verb');
+  if (canAppend && blockNode.children.length > 0 && blockNode.children[blockNode.children.length-1] !== null) {
+    const add = document.createElement('span');
+    add.className = 'add-stmt';
+    add.textContent = '[+]';
+    add.onclick = (e) => { e.stopPropagation(); appendStmtSlot(blockNode); };
+    wrap.appendChild(add);
+  }
+  return wrap;
+}
+
+function renderSlot(acceptType, parent, key, blockNode) {
+  const slot = document.createElement('span');
+  slot.className = 'slot';
+  slot.textContent = '[ ' + slotLabel(acceptType) + ' ]';
+  slot.onclick = (e) => {
+    e.stopPropagation();
+    SELECTED = {
+      parent,
+      key,
+      parentNode: blockNode || null,
+      slotMeta: blockNode
+        ? { accepts: 'Stmt-or-Terminator', blockNode, idx: key }
+        : { accepts: acceptType }
+    };
+    refreshAll();
+  };
+  // is this the currently-selected slot?
+  if (SELECTED && SELECTED.parent === parent && SELECTED.key === key) {
+    slot.classList.add('selected');
+  }
+  return slot;
+}
+
+function slotLabel(t) {
+  switch (t) {
+    case 'Value': return 'value';
+    case 'Number': return 'number';
+    case 'Bool': return 'bool';
+    case 'Block': return 'block';
+    case 'Literal': return 'literal';
+    case 'NumLit': return 'number';
+    case 'Stmt': return 'stmt';
+    case 'Stmt-or-Terminator': return 'stmt or ✕';
+    default: return String(t).toLowerCase();
+  }
+}
+
+function addDelete(el, node) {
+  const btn = document.createElement('span');
+  btn.className = 'delete-btn';
+  btn.textContent = '×';
+  btn.onclick = (e) => { e.stopPropagation(); deleteNode(node); };
+  el.appendChild(btn);
+}
+
+function litDisplay(node) {
+  if (node.litType === 'Number') return String(node.value);
+  if (node.litType === 'String') return JSON.stringify(node.value);
+  if (node.litType === 'Array') return '[' + node.value.map(v => JSON.stringify(v)).join(', ') + ']';
+  return String(node.value);
+}
+
+/* ============================================================
+   NUMPAD / STRINGPAD / CMPPAD
+   ============================================================ */
+
+let numpadValue = '0';
+
+function openNumpad() {
+  numpadValue = '0';
+  document.getElementById('npad-display').textContent = '0';
+  document.getElementById('numpad').classList.add('show');
+}
+function closeNumpad() { document.getElementById('numpad').classList.remove('show'); }
+
+document.querySelectorAll('#numpad button').forEach(b => {
+  b.onclick = () => {
+    const k = b.dataset.n;
+    if (k === 'cancel') return closeNumpad();
+    if (k === 'ok') {
+      const v = parseInt(numpadValue, 10) || 0;
+      placeLit('Number', v);
+      return closeNumpad();
+    }
+    if (k === 'back') {
+      numpadValue = numpadValue.slice(0,-1) || '0';
+    } else {
+      numpadValue = numpadValue === '0' ? k : numpadValue + k;
+      if (numpadValue.length > 6) numpadValue = numpadValue.slice(0,6);
+    }
+    document.getElementById('npad-display').textContent = numpadValue;
+  };
+});
+
+// stringpad — restricted alphabet
+const STR_ALPHABET = ['a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','r','s','t','u','v','w','x','y','z',' ','-','_','0','1','2','3','4','5','6','7','8','9'];
+let strpadValue = '';
+
+function openStringpad() {
+  strpadValue = '';
+  document.getElementById('spad-display').textContent = '';
+  const grid = document.getElementById('spad-grid');
+  grid.innerHTML = '';
+  STR_ALPHABET.forEach(ch => {
+    const b = document.createElement('button');
+    b.textContent = ch === ' ' ? '·' : ch;
+    b.onclick = () => {
+      strpadValue += ch;
+      if (strpadValue.length > 40) strpadValue = strpadValue.slice(0,40);
+      document.getElementById('spad-display').textContent = strpadValue;
+    };
+    grid.appendChild(b);
+  });
+  document.getElementById('stringpad').classList.add('show');
+}
+function closeStringpad() { document.getElementById('stringpad').classList.remove('show'); }
+
+document.getElementById('spad-back').onclick = () => {
+  strpadValue = strpadValue.slice(0,-1);
+  document.getElementById('spad-display').textContent = strpadValue;
+};
+document.getElementById('spad-cancel').onclick = closeStringpad;
+document.getElementById('spad-ok').onclick = () => {
+  placeLit('String', strpadValue);
+  closeStringpad();
+};
+
+// cmppad
+let cmpTarget = null;
+function openCmpPad(node) {
+  cmpTarget = node;
+  document.getElementById('cmppad').classList.add('show');
+}
+document.querySelectorAll('#cmppad button').forEach(b => {
+  b.onclick = () => {
+    const op = b.dataset.op;
+    if (op === 'cancel') { document.getElementById('cmppad').classList.remove('show'); return; }
+    if (cmpTarget) cmpTarget.op = op;
+    document.getElementById('cmppad').classList.remove('show');
+    refreshAll();
+  };
+});
+
+/* ============================================================
+   CODEGEN — AST → JS string for the Worker
+   ============================================================ */
+
+function compile(prog) {
+  const body = compileBlock(prog.body);
+  return body;
+}
+
+function compileBlock(block) {
+  return block.children.filter(c => c !== null).map(compileNode).join('\n');
+}
+
+function compileNode(n) {
+  if (!n) return '/*empty*/';
+  if (n.kind === 'lit') {
+    if (n.litType === 'Number') return String(n.value);
+    if (n.litType === 'String') return JSON.stringify(n.value);
+    if (n.litType === 'Array') return JSON.stringify(n.value);
+    return 'null';
+  }
+  if (n.kind === 'ref') {
+    const ve = VOCAB[n.name];
+    if (!ve) return '/*missing ref*/null';
+    return '(' + ve.compiled + ')';
+  }
+  if (n.kind === 'verb') {
+    switch (n.verb) {
+      case 'spawn':    return compileNode(n.slots.value);
+      case 'count':    return compileNode(n.slots.n);
+      case 'loop': {
+        const t = compileNode(n.slots.times);
+        const b = compileBlock(n.slots.body);
+        return `for(let __i=0; __i<(${t}); __i++){\n${b}\n}`;
+      }
+      case 'branch': {
+        const c = compileNode(n.slots.cond);
+        const tt = compileBlock(n.slots.then);
+        const ee = compileBlock(n.slots.else);
+        return `if(${c}){\n${tt}\n} else {\n${ee}\n}`;
+      }
+      case 'render':   return `__render(${compileNode(n.slots.what)});`;
+      case 'save':     return `__save(${compileNode(n.slots.key)}, ${compileNode(n.slots.val)});`;
+      case 'load':     return `__load(${compileNode(n.slots.key)})`;
+      case 'fetch':    return `(await __fetch(${compileNode(n.slots.url)}))`;
+      case 'talk':     return `__talk(${compileNode(n.slots.words)});`;
+      case 'dissolve': return `__dissolved = true;`;
+      case 'cmp': {
+        const a = compileNode(n.slots.a);
+        const b = compileNode(n.slots.b);
+        return `(${a} ${n.op} ${b})`;
+      }
+    }
+  }
+  return 'null';
+}
+
+/* ============================================================
+   WORKER HARNESS
+   ============================================================ */
+
+const CORE_PREAMBLE = `
+const __out = [];
+let   __dissolved = false;
+const __mem = Object.assign({}, self.__bootMem || {});
+const __render = (v) => __out.push({ kind:'render', value: v });
+const __talk   = (v) => __out.push({ kind:'talk', value: String(v) });
+const __save   = (k,v) => { __mem[k] = v; };
+const __load   = (k) => __mem[k];
+`;
+
+const NET_PREAMBLE = `
+const __fetch = async (u) => {
+  const r = await fetch(String(u));
+  return await r.text();
+};
+`;
+
+function runProgram() {
+  if (!programIsRunnable(AST)) {
+    setOutput([{ kind:'err', value:'program isn\\'t complete. ✕ at the end is required.' }], null, false);
+    return;
+  }
+
+  const code = compile(AST);
+  const hasNet = programHasFetch(AST);
+  const preamble = CORE_PREAMBLE + (hasNet ? NET_PREAMBLE : '');
+
+  const bootMem = {};
+  // load any persisted lens.mem.* into bootMem
+  for (let i=0; i<localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (k && k.startsWith('lens.mem.')) {
+      try { bootMem[k.slice(9)] = JSON.parse(localStorage.getItem(k)); } catch(e){}
+    }
+  }
+
+  const workerSrc = `
+self.__bootMem = ${JSON.stringify(bootMem)};
+${preamble}
+(async () => {
+  try {
+${code}
+    self.postMessage({ ok: true, dissolved: __dissolved, out: __out, mem: __mem });
+  } catch (e) {
+    self.postMessage({ ok: false, dissolved: __dissolved, out: __out, mem: __mem, err: String(e) });
+  }
+})();
+`;
+
+  // narration before
+  const before = narrateBefore(AST);
+  setRibbon(before);
+  appendOutput({ kind:'meta', value:'◐ ' + before });
+
+  const blob = new Blob([workerSrc], { type: 'application/javascript' });
+  const url = URL.createObjectURL(blob);
+  const worker = new Worker(url);
+  const t0 = performance.now();
+  let done = false;
+
+  const TIMEOUT_MS = 2000;
+  const timer = setTimeout(() => {
+    if (done) return;
+    done = true;
+    worker.terminate();
+    URL.revokeObjectURL(url);
+    setOutput([{ kind:'err', value:'i got stuck. the spider cut me. ✕.' }], null, false);
+    setRibbon('i got stuck. the spider cut me. ✕.');
+    setStatus('timeout — variant terminated');
+  }, TIMEOUT_MS);
+
+  worker.onmessage = (e) => {
+    if (done) return;
+    done = true;
+    clearTimeout(timer);
+    worker.terminate();
+    URL.revokeObjectURL(url);
+    const ms = (performance.now() - t0).toFixed(1);
+    const data = e.data;
+    // persist mem writes
+    if (data.mem) {
+      for (const k in data.mem) {
+        try { localStorage.setItem('lens.mem.' + k, JSON.stringify(data.mem[k])); } catch(e){}
+      }
+    }
+    const after = narrateAfter(AST, data);
+    setRibbon(after);
+    setOutput(data.out, data, true);
+    appendOutput({ kind:'meta', value:`◯ ${ms}ms · dissolved=${data.dissolved}` });
+    if (data.ok && data.dissolved) {
+      document.getElementById('save').disabled = false;
+      setStatus('ran clean. ✕’d. you can name & save.');
+    } else if (data.err) {
+      setStatus('error: ' + data.err);
+    } else {
+      setStatus('ran but didn’t dissolve cleanly');
+    }
+  };
+
+  worker.onerror = (err) => {
+    if (done) return;
+    done = true;
+    clearTimeout(timer);
+    worker.terminate();
+    URL.revokeObjectURL(url);
+    setOutput([{ kind:'err', value: 'i broke. ' + (err.message || 'unknown') + '. ✕ anyway.' }], null, false);
+    setStatus('error');
+  };
+}
+
+/* ============================================================
+   NARRATION — lens voice
+   ============================================================ */
+
+function narrateBefore(prog) {
+  const parts = prog.body.children.filter(c => c).map(narrateNode);
+  if (parts.length === 0) return 'i made nothing. then i ✕.';
+  if (parts.length === 1) return 'i ' + parts[0] + '.';
+  return 'i ' + parts.slice(0,-1).join(', then i ') + ', then i ' + parts[parts.length-1] + '.';
+}
+
+function narrateNode(n) {
+  if (!n) return 'forgot something';
+  if (n.kind === 'lit') {
+    if (n.litType === 'Number') return String(n.value);
+    if (n.litType === 'String') return `"${n.value}"`;
+    return JSON.stringify(n.value);
+  }
+  if (n.kind === 'ref') return `my ${n.name}`;
+  if (n.kind === 'block') return n.children.filter(c=>c).map(narrateNode).join(', then ');
+  if (n.kind === 'verb') {
+    switch (n.verb) {
+      case 'spawn':    return `△ ${narrateNode(n.slots.value)}`;
+      case 'count':    return `◯ to ${narrateNode(n.slots.n)}`;
+      case 'loop':     return `↻ ${narrateNode(n.slots.times)} times { ${narrateNode(n.slots.body)} }`;
+      case 'branch':   return `◇ if ${narrateNode(n.slots.cond)} { ${narrateNode(n.slots.then)} } else { ${narrateNode(n.slots.else)} }`;
+      case 'render':   return `□ ${narrateNode(n.slots.what)}`;
+      case 'save':     return `↓ ${narrateNode(n.slots.val)} as ${narrateNode(n.slots.key)}`;
+      case 'load':     return `↑ what i called ${narrateNode(n.slots.key)}`;
+      case 'fetch':    return `→ from ${narrateNode(n.slots.url)}`;
+      case 'talk':     return `◐ "${narrateInner(n.slots.words)}"`;
+      case 'dissolve': return `✕`;
+      case 'cmp':      return `${narrateNode(n.slots.a)} ${n.op} ${narrateNode(n.slots.b)}`;
+    }
+  }
+  return '?';
+}
+
+function narrateInner(n) {
+  if (!n) return '';
+  if (n.kind === 'lit' && n.litType === 'String') return n.value;
+  return narrateNode(n);
+}
+
+function narrateAfter(prog, result) {
+  if (!result.ok && result.err) {
+    return `i broke. ${result.err}. ✕ anyway.`;
+  }
+  const lines = (result.out || []);
+  const renders = lines.filter(l => l.kind === 'render').map(l => JSON.stringify(l.value));
+  const talks = lines.filter(l => l.kind === 'talk').map(l => `"${l.value}"`);
+  const bits = [];
+  if (renders.length === 1) bits.push(`the □ said ${renders[0]}`);
+  else if (renders.length > 1) bits.push(`the □ said ${renders.join(', ')}`);
+  if (talks.length === 1) bits.push(`i said ${talks[0]}`);
+  else if (talks.length > 1) bits.push(`i said ${talks.join(', then ')}`);
+  if (bits.length === 0) bits.push('nothing came out');
+  if (result.dissolved) bits.push('now i ✕');
+  return bits.join('. ') + '.';
+}
+
+/* ============================================================
+   OUTPUT / RIBBON / STATUS
+   ============================================================ */
+
+function setOutput(out, raw, ok) {
+  const el = document.getElementById('output');
+  el.innerHTML = '';
+  for (const line of out) {
+    const div = document.createElement('div');
+    if (line.kind === 'render') {
+      div.className = 'out-line';
+      div.textContent = '□ ' + JSON.stringify(line.value);
+    } else if (line.kind === 'talk') {
+      div.className = 'out-line';
+      div.textContent = '◐ ' + line.value;
+    } else if (line.kind === 'err') {
+      div.className = 'out-err';
+      div.textContent = '✕ ' + line.value;
+    } else if (line.kind === 'meta') {
+      div.className = 'out-meta';
+      div.textContent = line.value;
+    }
+    el.appendChild(div);
+  }
+}
+
+function appendOutput(line) {
+  const el = document.getElementById('output');
+  const div = document.createElement('div');
+  if (line.kind === 'meta') { div.className = 'out-meta'; div.textContent = line.value; }
+  else if (line.kind === 'err') { div.className = 'out-err'; div.textContent = '✕ ' + line.value; }
+  else { div.className = 'out-line'; div.textContent = String(line.value); }
+  el.appendChild(div);
+  el.scrollTop = el.scrollHeight;
+}
+
+function setRibbon(text) {
+  document.getElementById('ribbon-text').textContent = text;
+}
+
+function setStatus(text) {
+  document.getElementById('status').textContent = text;
+}
+
+/* ============================================================
+   VOCAB
+   ============================================================ */
+
+let VOCAB = {};
+const LENS_FLAGS = { net: false };
+
+function loadVocab() {
+  try {
+    const idx = JSON.parse(localStorage.getItem('lens.vocab.index') || '[]');
+    VOCAB = {};
+    for (const entry of idx) {
+      const name = entry.name;
+      const data = JSON.parse(localStorage.getItem('lens.vocab.' + name) || 'null');
+      if (data) VOCAB[name] = data;
+    }
+  } catch(e) {
+    VOCAB = {};
+  }
+  try {
+    const f = JSON.parse(localStorage.getItem('lens.flags') || '{}');
+    Object.assign(LENS_FLAGS, f);
+  } catch(e){}
+}
+
+function saveVerb(name, glyphHint) {
+  if (!programIsRunnable(AST)) return false;
+  if (VOCAB[name]) { setStatus('name taken — pick another'); return false; }
+  // strip trailing dissolve from saved AST (saved verbs don't dissolve when called)
+  const bodyChildren = AST.body.children.filter(c => c && !(c.kind === 'verb' && c.verb === 'dissolve'));
+  const stripped = { ...AST.body, children: bodyChildren };
+  const compiledBody = bodyChildren.map(compileNode).join('\n');
+  // wrap as IIFE returning last expression result if last is a Value-returning node
+  // for v0: saved verbs are inlined as IIFEs that produce no value (Stmt-style)
+  const compiled = `(()=>{ ${compiledBody} })()`;
+  const narration = narrateBefore({ body: { children: bodyChildren, kind:'block' } });
+  const returnType = 'Stmt';  // v0: all saved verbs treated as Stmt
+  const entry = {
+    name, glyphHint, narration, returnType,
+    ast: JSON.parse(JSON.stringify(stripped)),
+    compiled,
+    savedAt: Date.now()
+  };
+  VOCAB[name] = entry;
+  localStorage.setItem('lens.vocab.' + name, JSON.stringify(entry));
+  const idx = Object.values(VOCAB).map(v => ({ name: v.name, savedAt: v.savedAt, returnType: v.returnType, glyphHint: v.glyphHint }));
+  localStorage.setItem('lens.vocab.index', JSON.stringify(idx));
+  return true;
+}
+
+function deleteVerb(name) {
+  if (!confirm('forget ' + name + '?')) return;
+  delete VOCAB[name];
+  localStorage.removeItem('lens.vocab.' + name);
+  const idx = Object.values(VOCAB).map(v => ({ name: v.name, savedAt: v.savedAt, returnType: v.returnType, glyphHint: v.glyphHint }));
+  localStorage.setItem('lens.vocab.index', JSON.stringify(idx));
+  refreshAll();
+}
+
+function renderVocabPanel() {
+  const el = document.getElementById('vocab');
+  el.innerHTML = '<h3>HER MEMORY</h3>';
+  const names = Object.keys(VOCAB).sort();
+  if (names.length === 0) {
+    const p = document.createElement('div');
+    p.style.color = 'var(--dim)';
+    p.style.fontSize = '11px';
+    p.style.fontStyle = 'italic';
+    p.textContent = 'empty. she has not yet saved anything she made.';
+    el.appendChild(p);
+    return;
+  }
+  for (const name of names) {
+    const v = VOCAB[name];
+    const card = document.createElement('div');
+    card.className = 'vocab-card';
+    card.innerHTML = `<span class="vc-glyph shape">${v.glyphHint}</span><span class="vc-name">${escapeHtml(name)}</span><span class="vc-del" title="forget">×</span><div class="vc-narr">${escapeHtml(v.narration)}</div>`;
+    card.querySelector('.vc-del').onclick = (e) => { e.stopPropagation(); deleteVerb(name); };
+    el.appendChild(card);
+  }
+}
+
+/* ============================================================
+   SAVE DIALOG
+   ============================================================ */
+
+let saveDlgGlyph = '◈';
+let saveDlgName = '';
+
+const GLYPH_HINTS = ['◈','◇','◆','△','▽','◯','◉','□','▣','⬡','✦','✧','★','☆','∿','⌖','⊙','◐','◑','◒','◓','⎈','⌘'];
+
+function openSaveDialog() {
+  saveDlgGlyph = '◈';
+  saveDlgName = '';
+  const gp = document.getElementById('save-glyphs');
+  gp.innerHTML = '';
+  GLYPH_HINTS.forEach(g => {
+    const b = document.createElement('button');
+    b.textContent = g;
+    if (g === saveDlgGlyph) b.classList.add('sel');
+    b.onclick = () => {
+      saveDlgGlyph = g;
+      gp.querySelectorAll('button').forEach(x => x.classList.remove('sel'));
+      b.classList.add('sel');
+    };
+    gp.appendChild(b);
+  });
+  const np = document.getElementById('save-name-pad');
+  np.innerHTML = '';
+  STR_ALPHABET.forEach(ch => {
+    const b = document.createElement('button');
+    b.textContent = ch === ' ' ? '·' : ch;
+    b.onclick = () => {
+      if (saveDlgName.length < 24) saveDlgName += ch === ' ' ? '_' : ch;
+      document.getElementById('save-name-show').textContent = saveDlgName;
+    };
+    np.appendChild(b);
+  });
+  // backspace
+  const back = document.createElement('button');
+  back.textContent = '⌫';
+  back.onclick = () => {
+    saveDlgName = saveDlgName.slice(0,-1);
+    document.getElementById('save-name-show').textContent = saveDlgName;
+  };
+  np.appendChild(back);
+
+  document.getElementById('save-name-show').textContent = '';
+  document.getElementById('savedlg').classList.add('show');
+}
+
+document.getElementById('save-cancel').onclick = () => {
+  document.getElementById('savedlg').classList.remove('show');
+};
+document.getElementById('save-ok').onclick = () => {
+  if (!saveDlgName) { setStatus('she needs a name'); return; }
+  if (saveVerb(saveDlgName, saveDlgGlyph)) {
+    document.getElementById('savedlg').classList.remove('show');
+    setStatus(`saved ${saveDlgGlyph} ${saveDlgName} into her vocab`);
+    setRibbon(`i kept it. now i know how to ${saveDlgName}.`);
+    refreshAll();
+  }
+};
+
+/* ============================================================
+   UTIL
+   ============================================================ */
+
+function escapeHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function refreshAll() {
+  renderCompose();
+  renderPalette();
+  renderVocabPanel();
+  // run button
+  document.getElementById('run').disabled = !programIsRunnable(AST);
+  // save button is enabled only after a successful run; reset it on edit
+  document.getElementById('save').disabled = true;
+  // status
+  if (!SELECTED) {
+    if (programIsRunnable(AST)) setStatus('program complete. ✕ placed. ready to run.');
+    else setStatus('no slot selected · click a [ slot ] to fill it');
+  } else {
+    setStatus(`slot waiting · expects ${slotLabel(SELECTED.slotMeta.accepts)} · ${programHasDissolve(AST) ? '' : '✕ required to run'}`);
+  }
+}
+
+/* ============================================================
+   CONTROLS
+   ============================================================ */
+
+document.getElementById('run').onclick = runProgram;
+document.getElementById('clear').onclick = () => {
+  if (!confirm('clear the whole program?')) return;
+  AST = makeProgram();
+  selectFirstEmptySlot();
+  setRibbon('cleared. give me shapes.');
+  setOutput([], null, true);
+  document.getElementById('output').innerHTML = '<div class="out-meta">◯ OUTPUT — empty.</div>';
+  refreshAll();
+};
+document.getElementById('save').onclick = openSaveDialog;
+
+/* ============================================================
+   BOOT
+   ============================================================ */
+
+loadVocab();
+selectFirstEmptySlot();
+refreshAll();
+setRibbon('i’m an ameba. give me shapes. i’ll make a △, then i’ll ✕.');
+
+</script>
+</body>
+</html>
