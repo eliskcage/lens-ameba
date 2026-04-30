@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' blob:; connect-src 'none'; worker-src blob:;">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline'; connect-src 'none';">
 <title>lens · code · ameba</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -463,9 +463,8 @@ function programHasDissolve(prog) {
   return false;
 }
 
-function programHasFetch(prog) {
-  return treeHas(prog, n => n && n.kind === 'verb' && n.verb === 'fetch');
-}
+// programHasFetch removed in v0.2 — fetch is no longer a VM capability.
+// Restore here if v1 reintroduces network with a properly-designed env capability.
 
 function treeHas(node, pred) {
   if (!node) return false;
@@ -964,112 +963,145 @@ document.querySelectorAll('#cmppad button').forEach(b => {
 });
 
 /* ============================================================
-   CODEGEN — AST → JS string for the Worker
+   SHAPE-VM — direct AST interpreter (v0.2 sealed-language rewrite)
+   ============================================================
+   No JS emission. No Worker. No CSP gymnastics. The shape-AST
+   IS the program; execute() walks it. Operators are closed enums,
+   not parsed strings. Network capabilities don't exist. Membrane
+   is the language itself, not a sandbox around emitted code.
+
+   v0 to v0.2 delta:
+   - DELETED: compile / compileBlock / compileNode (JS-string emitter)
+   - DELETED: CORE_PREAMBLE / NET_PREAMBLE (no JS to preamble)
+   - DELETED: Worker harness, Blob/URL/postMessage (no Worker needed)
+   - DELETED: programHasFetch (no fetch capability in the VM)
+   - REPLACED: runProgram now calls execute() directly with op-counter
+     and wall-clock budget for runaway protection.
    ============================================================ */
 
-function compile(prog) {
-  const body = compileBlock(prog.body);
-  return body;
-}
+const VM_OP_BUDGET = 5_000_000;          // hard ceiling on node executions
+const VM_TIME_BUDGET_MS = 2000;           // wall-clock budget
+const VM_OP_CHECK_EVERY = 10_000;         // how often to check wall-clock
 
-function compileBlock(block) {
-  return block.children.filter(c => c !== null).map(compileNode).join('\n');
-}
-
-function compileNode(n) {
-  if (!n) return '/*empty*/';
-  if (n.kind === 'lit') {
-    if (n.litType === 'Number') return String(n.value);
-    if (n.litType === 'String') return JSON.stringify(n.value);
-    if (n.litType === 'Array') return JSON.stringify(n.value);
-    return 'null';
-  }
-  if (n.kind === 'ref') {
-    const ve = VOCAB[n.name];
-    if (!ve) return '/*missing ref*/null';
-    // PATCH 2 — saved verbs are guaranteed Stmt-typed in v0 (saveVerb asserts).
-    // Their compiled body is an IIFE expression: (()=>{ ... })()
-    // Wrapping in another paren is a no-op but legal; the IIFE-as-expression-statement
-    // is valid wherever a Stmt slot lives. If returnType is ever 'Value' in v1,
-    // saveVerb must change to actually return a value from the IIFE, AND this branch
-    // must drop the wrap when used in expression context.
-    if (ve.returnType !== 'Stmt') return '/*non-stmt ref unsupported in v0*/null';
-    return '(' + ve.compiled + ')';
-  }
-  if (n.kind === 'verb') {
-    switch (n.verb) {
-      case 'spawn':    return compileNode(n.slots.value);
-      case 'count':    return compileNode(n.slots.n);
-      case 'loop': {
-        const t = compileNode(n.slots.times);
-        const b = compileBlock(n.slots.body);
-        return `for(let __i=0; __i<(${t}); __i++){\n${b}\n}`;
-      }
-      case 'branch': {
-        const c = compileNode(n.slots.cond);
-        const tt = compileBlock(n.slots.then);
-        const ee = compileBlock(n.slots.else);
-        return `if(${c}){\n${tt}\n} else {\n${ee}\n}`;
-      }
-      case 'render':   return `__render(${compileNode(n.slots.what)});`;
-      case 'save':     return `__save(${compileNode(n.slots.key)}, ${compileNode(n.slots.val)});`;
-      case 'load':     return `__load(${compileNode(n.slots.key)})`;
-      case 'fetch':    return `(await __fetch(${compileNode(n.slots.url)}))`;
-      case 'talk':     return `__talk(${compileNode(n.slots.words)});`;
-      case 'dissolve': return `__dissolved = true;`;
-      case 'cmp': {
-        const a = compileNode(n.slots.a);
-        const b = compileNode(n.slots.b);
-        // PATCH 3 — clamp op to whitelist at compile time. Defends against
-        // tampered vocab AST loaded from localStorage with malicious op strings.
-        const ALLOWED_OPS = new Set(['<','==','>','!=','<=','>=']);
-        const op = ALLOWED_OPS.has(n.op) ? n.op : '==';
-        return `(${a} ${op} ${b})`;
-      }
-    }
-  }
-  return 'null';
-}
-
-/* ============================================================
-   WORKER HARNESS
-   ============================================================ */
-
-// PATCH 1 — neuter raw network/dynamic-load globals before user code runs.
-// CSP blocks them at the policy layer (connect-src 'none'); deleting the symbols
-// makes the membrane robust to CSP misconfig and to any future preamble mistakes.
-// Also forbid Function() and eval as belt-and-braces against codegen-injection.
-const CORE_PREAMBLE = `
-self.fetch = undefined;
-self.XMLHttpRequest = undefined;
-self.WebSocket = undefined;
-self.EventSource = undefined;
-self.importScripts = undefined;
-self.eval = undefined;
-self.Function = undefined;
-const __out = [];
-let   __dissolved = false;
-const __mem = Object.assign({}, self.__bootMem || {});
-const __render = (v) => __out.push({ kind:'render', value: v });
-const __talk   = (v) => __out.push({ kind:'talk', value: String(v) });
-const __save   = (k,v) => { __mem[String(k)] = v; };  // PATCH coerce key to string to avoid Bool/Number key collisions
-const __load   = (k) => __mem[String(k)];
-`;
-
-const NET_PREAMBLE = `
-// PATCH — restore native fetch only when a → node is in the tree.
-// Held in a closure so user code can't reassign it back to a wide capability.
-{
-  const __nativeFetch = self.fetch ?? null;
-  // re-enable temporarily by setting through a getter, then expose as __fetch
-  Object.defineProperty(self, 'fetch', { value: undefined, configurable: true });
-}
-const __fetch = async (u) => {
-  // Use a stashed reference. If your platform forbids restoring fetch via this path,
-  // the tree should never have placed a → node — net membrane stays closed.
-  throw new Error('net path disabled for v0');
+const CMP_OPS = {
+  '<':  (a,b) => a <  b,
+  '>':  (a,b) => a >  b,
+  '==': (a,b) => a === b,                 // STRICT — no coercion
+  '!=': (a,b) => a !== b,
+  '<=': (a,b) => a <= b,
+  '>=': (a,b) => a >= b,
 };
-`;
+
+class VMHalt extends Error { constructor(reason){ super(reason); this.name = 'VMHalt'; } }
+
+function makeVMEnv(bootMem) {
+  return {
+    out:       [],
+    mem:       Object.assign({}, bootMem || {}),
+    dissolved: false,
+    ops:       0,
+    deadline:  performance.now() + VM_TIME_BUDGET_MS,
+  };
+}
+
+function vmTick(env) {
+  env.ops++;
+  if (env.ops > VM_OP_BUDGET) throw new VMHalt('op-budget exceeded');
+  if ((env.ops % VM_OP_CHECK_EVERY) === 0) {
+    if (performance.now() > env.deadline) throw new VMHalt('time-budget exceeded');
+  }
+}
+
+function execute(node, env) {
+  vmTick(env);
+  if (node === null || node === undefined) return undefined;
+  if (env.dissolved) return undefined;     // post-dissolve no-op
+
+  switch (node.kind) {
+    case 'lit':
+      return node.value;
+
+    case 'ref': {
+      const ve = VOCAB[node.name];
+      if (!ve || !ve.ast) return undefined;
+      // saved verbs in v0 are Stmt-typed: execute their stripped block, return undefined
+      if (ve.returnType !== 'Stmt') return undefined;
+      return execute(ve.ast, env);
+    }
+
+    case 'block':
+      for (const c of node.children) {
+        if (env.dissolved) break;
+        execute(c, env);
+      }
+      return undefined;
+
+    case 'program':
+      return execute(node.body, env);
+
+    case 'verb':
+      return executeVerb(node, env);
+  }
+  return undefined;
+}
+
+function executeVerb(node, env) {
+  switch (node.verb) {
+    case 'spawn':    return execute(node.slots.value, env);
+    case 'count':    return execute(node.slots.n, env);
+    case 'loop': {
+      const times = Number(execute(node.slots.times, env)) | 0;
+      const body  = node.slots.body;
+      // hard cap loop count too — even a small body could exhaust ops
+      const cap = Math.max(0, Math.min(times, VM_OP_BUDGET));
+      for (let i = 0; i < cap; i++) {
+        if (env.dissolved) break;
+        execute(body, env);
+      }
+      return undefined;
+    }
+    case 'branch': {
+      const cond = execute(node.slots.cond, env);
+      return execute(cond ? node.slots.then : node.slots.else, env);
+    }
+    case 'render': {
+      const v = execute(node.slots.what, env);
+      env.out.push({ kind:'render', value: v });
+      return undefined;
+    }
+    case 'save': {
+      const k = String(execute(node.slots.key, env));
+      const v = execute(node.slots.val, env);
+      env.mem[k] = v;
+      return undefined;
+    }
+    case 'load': {
+      const k = String(execute(node.slots.key, env));
+      return env.mem[k];
+    }
+    case 'talk': {
+      const v = execute(node.slots.words, env);
+      env.out.push({ kind:'talk', value: String(v) });
+      return undefined;
+    }
+    case 'dissolve':
+      env.dissolved = true;
+      return undefined;
+    case 'cmp': {
+      const a = execute(node.slots.a, env);
+      const b = execute(node.slots.b, env);
+      const fn = CMP_OPS[node.op];        // closed enum lookup, not string parsing
+      return fn ? fn(a, b) : false;
+    }
+    case 'fetch':
+      // Network is deliberately NOT a VM capability in v0.2.
+      // The membrane is the language: no JS emit, no fetch global to stash.
+      // To enable network in v1, add a controlled side-effect via env, not code-gen.
+      throw new VMHalt('→ fetch is sealed in v0.2 — language has no net capability');
+    default:
+      throw new VMHalt('unknown verb: ' + node.verb);
+  }
+}
 
 function runProgram() {
   if (!programIsRunnable(AST)) {
@@ -1077,12 +1109,8 @@ function runProgram() {
     return;
   }
 
-  const code = compile(AST);
-  const hasNet = programHasFetch(AST);
-  const preamble = CORE_PREAMBLE + (hasNet ? NET_PREAMBLE : '');
-
+  // Load persisted lens.mem.* into the VM env
   const bootMem = {};
-  // load any persisted lens.mem.* into bootMem
   for (let i=0; i<localStorage.length; i++) {
     const k = localStorage.key(i);
     if (k && k.startsWith('lens.mem.')) {
@@ -1090,78 +1118,49 @@ function runProgram() {
     }
   }
 
-  const workerSrc = `
-self.__bootMem = ${JSON.stringify(bootMem)};
-${preamble}
-(async () => {
-  try {
-${code}
-    self.postMessage({ ok: true, dissolved: __dissolved, out: __out, mem: __mem });
-  } catch (e) {
-    self.postMessage({ ok: false, dissolved: __dissolved, out: __out, mem: __mem, err: String(e) });
-  }
-})();
-`;
-
-  // narration before
+  // Narration before
   const before = narrateBefore(AST);
   setRibbon(before);
   appendOutput({ kind:'meta', value:'◐ ' + before });
 
-  const blob = new Blob([workerSrc], { type: 'application/javascript' });
-  const url = URL.createObjectURL(blob);
-  const worker = new Worker(url);
+  const env = makeVMEnv(bootMem);
   const t0 = performance.now();
-  let done = false;
+  let result;
 
-  const TIMEOUT_MS = 2000;
-  const timer = setTimeout(() => {
-    if (done) return;
-    done = true;
-    worker.terminate();
-    URL.revokeObjectURL(url);
-    setOutput([{ kind:'err', value:'i got stuck. the spider cut me. ✕.' }], null, false);
-    setRibbon('i got stuck. the spider cut me. ✕.');
-    setStatus('timeout — variant terminated');
-  }, TIMEOUT_MS);
-
-  worker.onmessage = (e) => {
-    if (done) return;
-    done = true;
-    clearTimeout(timer);
-    worker.terminate();
-    URL.revokeObjectURL(url);
-    const ms = (performance.now() - t0).toFixed(1);
-    const data = e.data;
-    // persist mem writes
-    if (data.mem) {
-      for (const k in data.mem) {
-        try { localStorage.setItem('lens.mem.' + k, JSON.stringify(data.mem[k])); } catch(e){}
-      }
-    }
-    const after = narrateAfter(AST, data);
-    setRibbon(after);
-    setOutput(data.out, data, true);
-    appendOutput({ kind:'meta', value:`◯ ${ms}ms · dissolved=${data.dissolved}` });
-    if (data.ok && data.dissolved) {
-      document.getElementById('save').disabled = false;
-      setStatus('ran clean. ✕’d. you can name & save.');
-    } else if (data.err) {
-      setStatus('error: ' + data.err);
+  try {
+    execute(AST, env);
+    result = { ok: true, dissolved: env.dissolved, out: env.out, mem: env.mem };
+  } catch (e) {
+    if (e instanceof VMHalt) {
+      result = { ok: false, dissolved: env.dissolved, out: env.out, mem: env.mem, err: e.message };
     } else {
-      setStatus('ran but didn’t dissolve cleanly');
+      result = { ok: false, dissolved: env.dissolved, out: env.out, mem: env.mem, err: String(e) };
     }
-  };
+  }
 
-  worker.onerror = (err) => {
-    if (done) return;
-    done = true;
-    clearTimeout(timer);
-    worker.terminate();
-    URL.revokeObjectURL(url);
-    setOutput([{ kind:'err', value: 'i broke. ' + (err.message || 'unknown') + '. ✕ anyway.' }], null, false);
-    setStatus('error');
-  };
+  const ms = (performance.now() - t0).toFixed(1);
+
+  // persist mem writes (only if program dissolved cleanly — otherwise mem is suspect)
+  if (result.ok && result.dissolved && result.mem) {
+    for (const k in result.mem) {
+      try { localStorage.setItem('lens.mem.' + k, JSON.stringify(result.mem[k])); } catch(e){}
+    }
+  }
+
+  const after = narrateAfter(AST, result);
+  setRibbon(after);
+  setOutput(result.out, result, true);
+  appendOutput({ kind:'meta', value:`◯ ${ms}ms · ${env.ops} ops · dissolved=${result.dissolved}` });
+
+  if (result.ok && result.dissolved) {
+    document.getElementById('save').disabled = false;
+    setStatus('ran clean. ✕’d. you can name & save.');
+  } else if (result.err) {
+    setStatus('halted: ' + result.err);
+    setRibbon('i ' + (result.err.includes('time') ? 'got stuck' : 'broke') + '. the spider cut me. ✕.');
+  } else {
+    setStatus('ran but didn’t dissolve cleanly');
+  }
 }
 
 /* ============================================================
@@ -1330,11 +1329,10 @@ function loadVocab() {
       const name = entry.name;
       const data = JSON.parse(localStorage.getItem('lens.vocab.' + name) || 'null');
       if (!data) continue;
-      // PATCH 5 — reject malformed/oversized vocab entries.
-      if (data.returnType !== 'Stmt') continue;             // v0 only Stmt-typed verbs
-      if (typeof data.compiled !== 'string') continue;
-      if (data.compiled.length > 200_000) continue;          // hard cap on body size
-      if (data.ast && !validateAST(data.ast, 0)) continue;
+      // v0.2 vocab is AST-only (no compiled JS string). Validate shape.
+      if (data.returnType !== 'Stmt') continue;
+      if (!data.ast) continue;
+      if (!validateAST(data.ast, 0)) continue;
       VOCAB[name] = data;
     }
   } catch(e) {
@@ -1349,9 +1347,8 @@ function loadVocab() {
 function saveVerb(name, glyphHint) {
   if (!programIsRunnable(AST)) return false;
   if (VOCAB[name]) { setStatus('name taken — pick another'); return false; }
-  // PATCH 2/5 — strip trailing dissolve AND any nested dissolves from saved verbs.
-  // A saved verb that contained a nested dissolve could brick future composition
-  // (programHasDissolve scans the whole tree). Belt-and-braces normalisation here.
+  // v0.2 — saved verbs ARE the AST. No compiled JS string. Strip dissolves so
+  // the verb-call doesn't terminate the calling program.
   function stripDissolves(node) {
     if (!node) return node;
     if (node.kind === 'block') {
@@ -1366,23 +1363,19 @@ function saveVerb(name, glyphHint) {
   }
   const bodyChildren = AST.body.children.filter(c => c && !(c.kind === 'verb' && c.verb === 'dissolve')).map(stripDissolves);
   const stripped = { ...AST.body, children: bodyChildren };
-  const compiledBody = bodyChildren.map(compileNode).join('\n');
-  // PATCH 2 — saved verbs are Stmt-typed. The IIFE expression below is a legal
-  // expression-statement when inlined as a ref node in a Stmt slot. It returns
-  // undefined; that's intentional. v1 will branch on returnType and emit a Value-
-  // returning IIFE for Value-typed saved verbs.
-  const compiled = `(()=>{ ${compiledBody} })()`;
-  // Hard size cap on saved compiled body — prevents oversized vocab DOSing future loads.
-  if (compiled.length > 200_000) {
-    setStatus('verb too large to save (>200k compiled)');
+
+  // Hard cap on saved AST size (rough estimate via JSON length)
+  const astJson = JSON.stringify(stripped);
+  if (astJson.length > 200_000) {
+    setStatus('verb too large to save');
     return false;
   }
+
   const narration = narrateBefore({ body: { children: bodyChildren, kind:'block' } });
   const returnType = 'Stmt';  // v0: all saved verbs treated as Stmt
   const entry = {
     name, glyphHint, narration, returnType,
-    ast: JSON.parse(JSON.stringify(stripped)),
-    compiled,
+    ast: JSON.parse(astJson),
     savedAt: Date.now()
   };
   VOCAB[name] = entry;

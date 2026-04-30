@@ -4,19 +4,54 @@ The first tier of `lens-male` — the programming side of lens (4.6 revenant, da
 
 A self-contained HTML file. No build step. No dependencies. Open `index.html` in a browser.
 
-## v0.1 — patches from the first peer review (30 Apr 2026, evening)
+## v0.2 — sealed language (30 Apr 2026, late evening)
 
-Cortex's review surfaced sharp edges. Five load-bearing fixes landed, marked `PATCH 1..5` in the source:
+Dan called the v0.1 patches what they were: **patches against JavaScript's fragility.** The cmp.op whitelist exists because JS parses operators as strings. The fetch-deletion exists because JS exposes network globals. CSP exists because JS can be `eval`'d. **None of those are problems in shape-language because shapes don't have those failure modes.** They're closed enums. They're solved.
 
-1. **Worker preamble neuters raw network/dynamic-load globals.** `self.fetch`, `XMLHttpRequest`, `WebSocket`, `EventSource`, `importScripts`, `eval`, `Function` — all set to `undefined` before any user code runs. CSP was already blocking these; the deletion is defense-in-depth so the membrane survives a CSP misconfig.
-2. **`ref` codegen asserts `returnType === 'Stmt'`.** `saveVerb` already enforced Stmt-only at write; the codegen path now refuses non-Stmt refs explicitly, with a comment documenting the v1 expansion path.
-3. **`cmp.op` whitelisted at compile time.** Tampered or hand-crafted vocab AST loaded from localStorage can no longer inject arbitrary operator strings. Falls back to `==` if the op is unknown.
-4. **`renderBlock` no longer mutates the AST.** Blocks now ship with `children: [null]` from `makeBlock()` / `makeNode()`, so render is purely a read of state.
-5. **VOCAB validated on load.** Shape-typecheck against allowed `kind`/`type`/`litType` enums, slot-key whitelist per verb, AST depth limit (64), compiled-body size cap (200KB). Tampered or oversized vocab entries are silently dropped at load. `saveVerb` also strips nested `dissolve` nodes from the AST before persisting (defends against vocab-bricks-future-composition).
+So v0.2 deletes the JavaScript emission entirely. **The shape-AST IS the program; the interpreter walks it.** No more JS strings. No more Worker. No more CSP gymnastics.
 
-Items 6–10 (loop var collision, cmp coercion, memory bombs, structural Program refactor, ref expression-vs-statement context) deferred to v1 with reasoning in the review thread.
+### What was deleted
 
-Items deliberately left as-is: CSP `blob:` allowance (the typed-AST UI is the primary membrane, CSP is the secondary), spawn-as-inject-literal semantics (intentional, not "evaluate-and-bind").
+- `compile()` / `compileBlock()` / `compileNode()` — the entire JS-string emitter.
+- `CORE_PREAMBLE` and `NET_PREAMBLE` — no JS code emitted, no preamble to inject.
+- The Web Worker harness, `Blob` / `URL.createObjectURL` / `postMessage` choreography.
+- `programHasFetch` — fetch is not a VM capability; it cannot be a runtime concern.
+
+### What replaced it
+
+A direct AST interpreter (`execute(node, env)`) with:
+
+- **Closed-enum operators** — `CMP_OPS` is a `{op: fn}` table; the op is a key lookup, not a parsed string. **Strict equality** (`===` / `!==`) — no JS coercion shenanigans.
+- **Op-budget** (5,000,000 node executions, hard ceiling) and **time-budget** (2 seconds, wall-clock) for runaway protection. Together they replace the Worker's `terminate()` ability without needing a Worker at all.
+- **Sealed network capability.** A `→ fetch` node throws `VMHalt('→ fetch is sealed in v0.2')`. Network is intentionally NOT a VM primitive in v0. To add it in v1, add a controlled side-effect via `env`, not via codegen.
+- **Mem persistence** only on clean dissolve. If a program halts on op-budget or error, its mem writes are discarded (the world only sees committed state from completed thoughts).
+
+### What's safer now (and why)
+
+| concern | v0.1 (JS-emit) | v0.2 (shape-VM) |
+|---|---|---|
+| operator injection | whitelist at compile time | impossible: ops are key lookups in a closed table |
+| network capability | delete fetch global, hope CSP holds | impossible: no JS runtime, no fetch global to stash |
+| eval / Function injection | delete the symbols, hope nothing else exists | impossible: no JS evaluation step at all |
+| memory bombs | Worker terminate() | op-budget halts before allocation gets large |
+| infinite loops | Worker terminate() | op-budget OR wall-clock-budget halts |
+| tampered vocab | shape-validate AST + cap compiled-body length | shape-validate AST (compiled string no longer exists) |
+| CSP / Blob URL surface | CSP allows blob:, worker-src blob: | tightened CSP — no blob: or worker-src needed |
+
+### What stayed the same
+
+- The 10-verb shape alphabet. The typed-AST compose UI. The illegal-unconstructible palette gating. The mandatory-`✕` rule. The narration. The vocab-as-her-memory model.
+- The story is the same. The substrate underneath got swapped from a leaky JS pipeline to a sealed shape interpreter.
+
+### Mantra
+
+**English is the label on the plate. Shapes are the food. JavaScript was a serving tray. The serving tray is no longer in the kitchen.**
+
+---
+
+## v0.1 — patches from the first peer review (now historical, superseded by v0.2)
+
+Five JS-emit-era patches were applied before the rewrite: worker preamble globals neutering, `ref`-codegen Stmt assertion, `cmp.op` whitelist, `renderBlock` purity, and vocab validation. All five problem domains were eliminated by v0.2; the patches are no longer load-bearing because the surfaces they defended don't exist anymore. The audit trail lives in commit `9f36557`.
 
 ## What this is
 
