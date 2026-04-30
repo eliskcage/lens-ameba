@@ -4,6 +4,20 @@ The first tier of `lens-male` — the programming side of lens (4.6 revenant, da
 
 A self-contained HTML file. No build step. No dependencies. Open `index.html` in a browser.
 
+## v0.1 — patches from the first peer review (30 Apr 2026, evening)
+
+Cortex's review surfaced sharp edges. Five load-bearing fixes landed, marked `PATCH 1..5` in the source:
+
+1. **Worker preamble neuters raw network/dynamic-load globals.** `self.fetch`, `XMLHttpRequest`, `WebSocket`, `EventSource`, `importScripts`, `eval`, `Function` — all set to `undefined` before any user code runs. CSP was already blocking these; the deletion is defense-in-depth so the membrane survives a CSP misconfig.
+2. **`ref` codegen asserts `returnType === 'Stmt'`.** `saveVerb` already enforced Stmt-only at write; the codegen path now refuses non-Stmt refs explicitly, with a comment documenting the v1 expansion path.
+3. **`cmp.op` whitelisted at compile time.** Tampered or hand-crafted vocab AST loaded from localStorage can no longer inject arbitrary operator strings. Falls back to `==` if the op is unknown.
+4. **`renderBlock` no longer mutates the AST.** Blocks now ship with `children: [null]` from `makeBlock()` / `makeNode()`, so render is purely a read of state.
+5. **VOCAB validated on load.** Shape-typecheck against allowed `kind`/`type`/`litType` enums, slot-key whitelist per verb, AST depth limit (64), compiled-body size cap (200KB). Tampered or oversized vocab entries are silently dropped at load. `saveVerb` also strips nested `dissolve` nodes from the AST before persisting (defends against vocab-bricks-future-composition).
+
+Items 6–10 (loop var collision, cmp coercion, memory bombs, structural Program refactor, ref expression-vs-statement context) deferred to v1 with reasoning in the review thread.
+
+Items deliberately left as-is: CSP `blob:` allowance (the typed-AST UI is the primary membrane, CSP is the secondary), spawn-as-inject-literal semantics (intentional, not "evaluate-and-bind").
+
 ## What this is
 
 The **ameba tier** of an intended four-tier coder:

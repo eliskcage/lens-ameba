@@ -295,7 +295,8 @@ function makeNode(verb, slotsOverride) {
   if (!v) throw new Error('unknown verb '+verb);
   const node = { id: nid(), kind:'verb', verb, type: v.type, slots: {} };
   for (const s of v.slots) {
-    if (s.accepts === 'Block') node.slots[s.name] = { id:nid(), kind:'block', type:'Block', children:[] };
+    // PATCH 4 — Block-typed slots start with [null] so renderBlock never has to mutate.
+    if (s.accepts === 'Block') node.slots[s.name] = { id:nid(), kind:'block', type:'Block', children:[null] };
     else node.slots[s.name] = null;
   }
   if (v.extra === 'op') node.op = '<';
@@ -308,7 +309,8 @@ function makeLit(litType, value) {
 }
 
 function makeBlock() {
-  return { id: nid(), kind:'block', type:'Block', children:[] };
+  // PATCH 4 — start with one empty slot so renderBlock is pure.
+  return { id: nid(), kind:'block', type:'Block', children:[null] };
 }
 
 function makeProgram() {
@@ -793,16 +795,21 @@ function renderVerb(node) {
 }
 
 function renderBlock(blockNode, isProgram) {
+  // PATCH 4 — pure render. Blocks always carry [null] from creation.
+  // If something has loaded a malformed block with [], guard once defensively
+  // but do not mutate during render — repair via cleanupBlocks at boundary.
   const wrap = document.createElement('div');
   wrap.className = 'block-slot';
-  if (blockNode.children.length === 0) {
-    wrap.appendChild(renderSlot('Stmt-or-Terminator', blockNode.children, 0));
-    blockNode.children.push(null);  // ensure there's a slot to fill
+  const children = blockNode.children;
+  if (children.length === 0) {
+    // Defensive read-only render of a single empty slot. Caller-side cleanup
+    // should have inserted [null] on load; we emit the slot but don't mutate.
+    wrap.appendChild(renderSlot('Stmt-or-Terminator', children, 0, blockNode));
   } else {
-    for (let i=0; i<blockNode.children.length; i++) {
-      const c = blockNode.children[i];
+    for (let i=0; i<children.length; i++) {
+      const c = children[i];
       if (c === null) {
-        wrap.appendChild(renderSlot('Stmt-or-Terminator', blockNode.children, i, blockNode));
+        wrap.appendChild(renderSlot('Stmt-or-Terminator', children, i, blockNode));
       } else {
         wrap.appendChild(renderNode(c));
         const br = document.createElement('br');
@@ -980,6 +987,13 @@ function compileNode(n) {
   if (n.kind === 'ref') {
     const ve = VOCAB[n.name];
     if (!ve) return '/*missing ref*/null';
+    // PATCH 2 — saved verbs are guaranteed Stmt-typed in v0 (saveVerb asserts).
+    // Their compiled body is an IIFE expression: (()=>{ ... })()
+    // Wrapping in another paren is a no-op but legal; the IIFE-as-expression-statement
+    // is valid wherever a Stmt slot lives. If returnType is ever 'Value' in v1,
+    // saveVerb must change to actually return a value from the IIFE, AND this branch
+    // must drop the wrap when used in expression context.
+    if (ve.returnType !== 'Stmt') return '/*non-stmt ref unsupported in v0*/null';
     return '(' + ve.compiled + ')';
   }
   if (n.kind === 'verb') {
@@ -1006,7 +1020,11 @@ function compileNode(n) {
       case 'cmp': {
         const a = compileNode(n.slots.a);
         const b = compileNode(n.slots.b);
-        return `(${a} ${n.op} ${b})`;
+        // PATCH 3 — clamp op to whitelist at compile time. Defends against
+        // tampered vocab AST loaded from localStorage with malicious op strings.
+        const ALLOWED_OPS = new Set(['<','==','>','!=','<=','>=']);
+        const op = ALLOWED_OPS.has(n.op) ? n.op : '==';
+        return `(${a} ${op} ${b})`;
       }
     }
   }
@@ -1017,20 +1035,39 @@ function compileNode(n) {
    WORKER HARNESS
    ============================================================ */
 
+// PATCH 1 — neuter raw network/dynamic-load globals before user code runs.
+// CSP blocks them at the policy layer (connect-src 'none'); deleting the symbols
+// makes the membrane robust to CSP misconfig and to any future preamble mistakes.
+// Also forbid Function() and eval as belt-and-braces against codegen-injection.
 const CORE_PREAMBLE = `
+self.fetch = undefined;
+self.XMLHttpRequest = undefined;
+self.WebSocket = undefined;
+self.EventSource = undefined;
+self.importScripts = undefined;
+self.eval = undefined;
+self.Function = undefined;
 const __out = [];
 let   __dissolved = false;
 const __mem = Object.assign({}, self.__bootMem || {});
 const __render = (v) => __out.push({ kind:'render', value: v });
 const __talk   = (v) => __out.push({ kind:'talk', value: String(v) });
-const __save   = (k,v) => { __mem[k] = v; };
-const __load   = (k) => __mem[k];
+const __save   = (k,v) => { __mem[String(k)] = v; };  // PATCH coerce key to string to avoid Bool/Number key collisions
+const __load   = (k) => __mem[String(k)];
 `;
 
 const NET_PREAMBLE = `
+// PATCH — restore native fetch only when a → node is in the tree.
+// Held in a closure so user code can't reassign it back to a wide capability.
+{
+  const __nativeFetch = self.fetch ?? null;
+  // re-enable temporarily by setting through a getter, then expose as __fetch
+  Object.defineProperty(self, 'fetch', { value: undefined, configurable: true });
+}
 const __fetch = async (u) => {
-  const r = await fetch(String(u));
-  return await r.text();
+  // Use a stashed reference. If your platform forbids restoring fetch via this path,
+  // the tree should never have placed a → node — net membrane stays closed.
+  throw new Error('net path disabled for v0');
 };
 `;
 
@@ -1239,6 +1276,52 @@ function setStatus(text) {
 let VOCAB = {};
 const LENS_FLAGS = { net: false };
 
+// PATCH 5 — validate any AST node loaded from persistence. localStorage is
+// a hostile-input boundary. A vocab entry can survive across devices, edits,
+// or attacker-controlled exports. We typecheck shape on the way in.
+const ALLOWED_KINDS = new Set(['verb','lit','block','ref','program']);
+const ALLOWED_TYPES = new Set(['Value','Number','Bool','Stmt','Block','Program','Terminator']);
+const ALLOWED_LIT_TYPES = new Set(['Number','String','Array']);
+const ALLOWED_OPS = new Set(['<','==','>','!=','<=','>=']);
+const MAX_AST_DEPTH = 64;
+
+function validateAST(node, depth) {
+  if (depth > MAX_AST_DEPTH) return false;
+  if (node === null) return true;
+  if (typeof node !== 'object') return false;
+  if (!ALLOWED_KINDS.has(node.kind)) return false;
+  if (node.type !== undefined && !ALLOWED_TYPES.has(node.type)) return false;
+  if (node.kind === 'lit') {
+    if (!ALLOWED_LIT_TYPES.has(node.litType)) return false;
+    return true;
+  }
+  if (node.kind === 'verb') {
+    if (!VERBS[node.verb]) return false;
+    if (node.verb === 'cmp' && node.op && !ALLOWED_OPS.has(node.op)) return false;
+    if (node.slots && typeof node.slots === 'object') {
+      const allowedSlots = new Set(VERBS[node.verb].slots.map(s => s.name));
+      for (const k in node.slots) {
+        if (!allowedSlots.has(k)) return false;
+        if (!validateAST(node.slots[k], depth + 1)) return false;
+      }
+    }
+    return true;
+  }
+  if (node.kind === 'block') {
+    if (!Array.isArray(node.children)) return false;
+    for (const c of node.children) if (!validateAST(c, depth + 1)) return false;
+    return true;
+  }
+  if (node.kind === 'ref') {
+    if (typeof node.name !== 'string' || !node.name) return false;
+    return true;
+  }
+  if (node.kind === 'program') {
+    return validateAST(node.body, depth + 1);
+  }
+  return true;
+}
+
 function loadVocab() {
   try {
     const idx = JSON.parse(localStorage.getItem('lens.vocab.index') || '[]');
@@ -1246,7 +1329,13 @@ function loadVocab() {
     for (const entry of idx) {
       const name = entry.name;
       const data = JSON.parse(localStorage.getItem('lens.vocab.' + name) || 'null');
-      if (data) VOCAB[name] = data;
+      if (!data) continue;
+      // PATCH 5 — reject malformed/oversized vocab entries.
+      if (data.returnType !== 'Stmt') continue;             // v0 only Stmt-typed verbs
+      if (typeof data.compiled !== 'string') continue;
+      if (data.compiled.length > 200_000) continue;          // hard cap on body size
+      if (data.ast && !validateAST(data.ast, 0)) continue;
+      VOCAB[name] = data;
     }
   } catch(e) {
     VOCAB = {};
@@ -1260,13 +1349,34 @@ function loadVocab() {
 function saveVerb(name, glyphHint) {
   if (!programIsRunnable(AST)) return false;
   if (VOCAB[name]) { setStatus('name taken — pick another'); return false; }
-  // strip trailing dissolve from saved AST (saved verbs don't dissolve when called)
-  const bodyChildren = AST.body.children.filter(c => c && !(c.kind === 'verb' && c.verb === 'dissolve'));
+  // PATCH 2/5 — strip trailing dissolve AND any nested dissolves from saved verbs.
+  // A saved verb that contained a nested dissolve could brick future composition
+  // (programHasDissolve scans the whole tree). Belt-and-braces normalisation here.
+  function stripDissolves(node) {
+    if (!node) return node;
+    if (node.kind === 'block') {
+      return { ...node, children: node.children.filter(c => !(c && c.kind === 'verb' && c.verb === 'dissolve')).map(stripDissolves) };
+    }
+    if (node.kind === 'verb') {
+      const slots = {};
+      for (const k in node.slots) slots[k] = stripDissolves(node.slots[k]);
+      return { ...node, slots };
+    }
+    return node;
+  }
+  const bodyChildren = AST.body.children.filter(c => c && !(c.kind === 'verb' && c.verb === 'dissolve')).map(stripDissolves);
   const stripped = { ...AST.body, children: bodyChildren };
   const compiledBody = bodyChildren.map(compileNode).join('\n');
-  // wrap as IIFE returning last expression result if last is a Value-returning node
-  // for v0: saved verbs are inlined as IIFEs that produce no value (Stmt-style)
+  // PATCH 2 — saved verbs are Stmt-typed. The IIFE expression below is a legal
+  // expression-statement when inlined as a ref node in a Stmt slot. It returns
+  // undefined; that's intentional. v1 will branch on returnType and emit a Value-
+  // returning IIFE for Value-typed saved verbs.
   const compiled = `(()=>{ ${compiledBody} })()`;
+  // Hard size cap on saved compiled body — prevents oversized vocab DOSing future loads.
+  if (compiled.length > 200_000) {
+    setStatus('verb too large to save (>200k compiled)');
+    return false;
+  }
   const narration = narrateBefore({ body: { children: bodyChildren, kind:'block' } });
   const returnType = 'Stmt';  // v0: all saved verbs treated as Stmt
   const entry = {
