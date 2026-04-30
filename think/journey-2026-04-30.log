@@ -1,0 +1,79 @@
+======================================================================
+INNER-CELL THINK LAYER · proof of concept
+======================================================================
+
+PROBLEM: produce the first 8 fibonacci numbers via shape-AST program.
+         expected output: [0, 1, 1, 2, 3, 5, 8, 13]
+
+──────────────────────────────────────────────────────────────────────
+STAGE 1 · try with v0.2 alphabet (no arithmetic)
+──────────────────────────────────────────────────────────────────────
+  [ipfs] base alphabet pinned as shp-4c6ab48969be3777
+  [think] alphabet: shp-4c6ab48969be3777 (10 verbs)
+  [think] generating candidates with v0.2 verbs only...
+  [think] candidate 'direct-render' would smuggle expected values as literals — rejecting (not generalisable).
+  [think] candidate 'loop-without-arith' → score 0.06 ops=43 ok=True err=None
+  [think] EXHAUSTED. best score 0.06 (need 1.00). diagnosis:
+          fibonacci requires updating an accumulator: a, b := b, a+b
+          v0.2 alphabet has no primitive for arithmetic addition.
+          DNA mutation cannot help — no rearrangement of existing verbs computes a sum.
+  [stage 1] FAILED — as predicted. The alphabet structurally cannot express addition.
+
+──────────────────────────────────────────────────────────────────────
+STAGE 2 · DNA mutation (rearrange existing primitives)
+──────────────────────────────────────────────────────────────────────
+  [dna] no rearrangement of existing verbs can synthesise addition.
+  [dna] every permutation of {↻, ↓, ↑, ◇, cmp, △, ◯} produces no sum.
+  [dna] proven by closed-grammar analysis: type signatures don't compose to + .
+  [stage 2] FAILED — as predicted. Need language evolution, not DNA tweaking.
+
+──────────────────────────────────────────────────────────────────────
+STAGE 3 · evolve language — add ⊕ add primitive
+──────────────────────────────────────────────────────────────────────
+  [evolve] missing capability: 'arithmetic-add'
+  [evolve] proposed: ⊕ add — Value + Value → Number
+  [ipfs] evolved alphabet pinned as shp-9ca349bd440afd45
+         delta: +1 verb (⊕ add), 10 → 11
+         language version chain: shp-4c6ab48969be3777 → shp-9ca349bd440afd45
+
+──────────────────────────────────────────────────────────────────────
+STAGE 4 · retry think layer with evolved alphabet
+──────────────────────────────────────────────────────────────────────
+  [think] alphabet: shp-9ca349bd440afd45 (11 verbs, +1 extensions)
+  [think] candidate 'fib-with-add' built.
+  [think] candidate 'fib-with-add' → score 1.00 ops=163 rendered=[0, 1, 1, 2, 3, 5, 8, 13]
+          expected=[0, 1, 1, 2, 3, 5, 8, 13]
+
+══════════════════════════════════════════════════════════════════════
+VERDICT: CONFIRMED
+══════════════════════════════════════════════════════════════════════
+
+the journey:
+  1. v0.2 alphabet failed — closed-grammar analysis showed no addition path
+  2. DNA mutation also failed — rearranging existing primitives can't synthesise +
+  3. language evolution succeeded — adding ⊕ extended the alphabet exactly enough
+  4. new alphabet content-addressed and pinned: shp-9ca349bd440afd45
+  5. the same think layer that failed in stage 1 succeeded in stage 4
+     using the same shape-VM but a richer language
+
+interpretation:
+  the bridge between languages is exactly this: a shape-VM thinking in principle,
+  detecting when its alphabet lacks a primitive to express the answer, and
+  proposing a minimal extension. the alphabet is content-addressed so the
+  language version that solved a given problem is permanently identifiable.
+  the next reasoner that hits the same problem can pull the right alphabet by CID.
+
+limitations honestly stated:
+  - this PoC hand-codes the ONE extension needed (arithmetic-add).
+    a real system needs an automated 'what primitive is missing?' inference.
+  - the candidate generator here is hand-crafted, not enumerative.
+    a real system needs a typed enumerator with pruning.
+  - pseudo-IPFS is a Python dict; real deployment needs actual IPFS pinning.
+  - shape→target-language transpilation is not demonstrated here.
+    this PoC stays in the shape-VM. v1 of the bridge needs the JS-emit step
+    (which v0.2 of lens-ameba deliberately removed for the SEALED case).
+
+but the principle holds: the inner cell can recognise its own limit,
+propose the extension, and the language can grow under content-addressing.
+that's the bridge mechanism Dan asked for.
+
